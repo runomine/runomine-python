@@ -1,0 +1,111 @@
+# Publishes runomine to PyPI when src/runomine/_version.py has a version PyPI doesn't have yet, then tags it vX.Y.Z.
+# This repository receives snapshot commits on main, so every push is checked; most of them change nothing here.
+# Authentication is PyPI trusted publishing (OIDC, the "pypi" environment): no token is stored anywhere. Before the
+# project exists on PyPI, a "pending publisher" registered on pypi.org lets this workflow create it.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Is this version new?
+        id: plan
+        run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^__version__ = "(.*)"$/\1/p' src/runomine/_version.py)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]] || { echo "::error::src/runomine/_version.py version '$version' isn't X.Y.Z"; exit 1; }
+          release=$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/runomine/$version/json")
+          case "$release" in
+            200) publish=false; echo "runomine $version is already on PyPI." ;;
+            404) publish=true; echo "runomine $version is new: publishing." ;;
+            *) echo "::error::PyPI answered $release; not guessing."; exit 1 ;;
+          esac
+          tag=false
+          if [ -z "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then tag=true; fi
+          { echo "version=$version"; echo "publish=$publish"; echo "tag=$tag"; } >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[test]'
+      - run: pytest -q
+
+  build:
+    needs: [plan, test]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - name: The files carry the planned version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          ls dist
+          test -f "dist/runomine-$VERSION.tar.gz" && test -f "dist/runomine-$VERSION-py3-none-any.whl"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/runomine
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  tag:
+    needs: [plan, publish]
+    # After a successful publish, or when PyPI already has the version (published by hand) but the tag is missing.
+    if: always() && needs.plan.outputs.tag == 'true' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.plan.outputs.publish == 'false'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag v${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$GITHUB_SHA" --silent

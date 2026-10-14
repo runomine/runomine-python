@@ -273,8 +273,10 @@ logger, never raised. The sender is restarted after a fork (gunicorn, uWSGI).
 - No cookies, no local storage, nothing is set in the browser.
 - The visitor's IP **never leaves your server**. It is only an input to the visitor hash:
   `visitor = sha256(hmac_sha256(token, "runomine:" + utc_day) + "|" + ip + "|" + user_agent + "|" + host)[:16]`.
-  The salt changes every UTC day and per site, so a person counts once per day and site and cannot be followed
-  across days or sites.
+  The salt changes every UTC day and per site, so a person counts once per day and site, and the hash on its own
+  cannot follow anyone across days or sites.
+- If you send `user` (your own user id), runomine links that user's visits and purchases over time to attribute
+  revenue: that is no longer anonymous audience measurement, and it needs its own legal basis.
 - The user agent is sent with pageviews so runomine can drop bots and count device families; it is then discarded.
 - No source, bot or device classification happens in the library; that lives in runomine, once.
 

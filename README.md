@@ -10,13 +10,13 @@ Cookieless analytics that counts money, not just visits. This library sends page
 
 ## Install
 
-From PyPI (once published):
+From PyPI:
 
 ```sh
 pip install runomine
 ```
 
-Until then, from this repository (public, no token needed):
+Or straight from this repository:
 
 ```sh
 pip install "git+https://github.com/runomine/runomine-python.git"

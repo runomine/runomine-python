@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "runomine"
+version = "0.1.0"
+description = "Cookieless analytics that counts money, not just visits: the Python library for runomine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "runomine" }]
+keywords = ["analytics", "cookieless", "privacy", "django", "fastapi", "asgi"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Framework :: Django",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7", "django>=4.2", "starlette>=0.27", "httpx>=0.24"]
+
+[project.urls]
+Homepage = "https://runomine.com"
+Source = "https://github.com/runomine/runomine-python"
+Issues = "https://github.com/runomine/runomine-python/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/runomine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

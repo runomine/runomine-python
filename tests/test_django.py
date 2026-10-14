@@ -43,6 +43,11 @@ def missing(request):
     return HttpResponse("<h1>nope</h1>", status=404)
 
 
+def news(request):
+    request.runomine_props = {"section": "news", "area": "public"}
+    return HttpResponse("<h1>news</h1>")
+
+
 def signup(request):
     rd.track(request, "signup", props={"plan": "pro"})
     return HttpResponse("<p>welcome</p>")
@@ -57,6 +62,7 @@ urlpatterns = [
     path("api", api),
     path("missing", missing),
     path("signup", signup),
+    path("news", news),
 ]
 
 
@@ -92,6 +98,14 @@ def test_records_html_get(rom, transport):
     assert event["country"] == "ES"
     assert event["visitor"] == visitor_hash(TOKEN, "127.0.0.1", UA, "testserver")
     assert "user" not in event
+
+
+def test_a_view_attaches_props_to_its_page_view(rom, transport):
+    DjangoTestClient(HTTP_USER_AGENT=UA).get("/news")
+    DjangoTestClient(HTTP_USER_AGENT=UA).get("/pricing")
+    news_view, pricing_view = sent(rom, transport)
+    assert news_view["props"] == {"section": "news", "area": "public"}
+    assert "props" not in pricing_view
 
 
 @pytest.mark.parametrize(

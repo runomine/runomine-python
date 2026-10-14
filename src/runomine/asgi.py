@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Iterable, MutableMapping
+from typing import Any, Awaitable, Callable, Iterable, Mapping, MutableMapping
 from urllib.parse import quote
 
 from . import client as _core
@@ -111,7 +111,9 @@ class RunomineMiddleware:
 
     Options: ``client`` (or ``token``/``url``/``enabled`` to build one; default: the process-wide client from the
     environment), ``skip_paths`` (prefixes or fnmatch patterns), ``ip_header`` (e.g. ``"x-forwarded-for"`` behind
-    a proxy) and ``get_user`` (``scope -> user id``; default: Starlette's ``scope["user"].identity``).
+    a proxy), ``get_user`` (``scope -> user id``; default: Starlette's ``scope["user"].identity``) and
+    ``get_props`` (``scope -> props`` for the page view; default: ``request.state.runomine_props`` in Starlette/FastAPI,
+    i.e. ``scope["state"]["runomine_props"]``).
     """
 
     def __init__(
@@ -125,6 +127,7 @@ class RunomineMiddleware:
         skip_paths: Iterable[str] = DEFAULT_SKIP_PATHS,
         ip_header: str | None = None,
         get_user: Callable[[Scope], Any] | None = None,
+        get_props: Callable[[Scope], Any] | None = None,
     ) -> None:
         self.app = app
         if client is None and (token is not None or url is not None or enabled is not None):
@@ -133,6 +136,7 @@ class RunomineMiddleware:
         self.skip_paths = tuple(skip_paths or ())
         self.ip_header = ip_header
         self.get_user = get_user
+        self.get_props = get_props
 
     @property
     def client(self) -> Client:
@@ -180,9 +184,20 @@ class RunomineMiddleware:
 
     def _record(self, scope: Scope, client: Client) -> None:
         try:
-            client.pageview(request=context_from_scope(scope, self.ip_header, self.get_user))
+            client.pageview(request=context_from_scope(scope, self.ip_header, self.get_user), props=self._props(scope))
         except Exception:
             logger.debug("runomine: pageview failed", exc_info=True)
+
+
+    def _props(self, scope: Scope) -> Any:
+        try:
+            if self.get_props is not None:
+                return self.get_props(scope)
+            state = scope.get("state")
+            return state.get("runomine_props") if isinstance(state, Mapping) else None
+        except Exception:
+            logger.debug("runomine: get_props failed", exc_info=True)
+            return None
 
 
 def _scope_of(request: Any) -> Scope | None:

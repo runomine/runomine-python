@@ -86,6 +86,18 @@ def checkout_success(request):
 
 `user` defaults to `request.user.pk`.
 
+### Page view props
+
+Page views take props too, stored as the page view's dims: each key becomes a breakdown and a filter in Traffic
+(`area` feeds the Areas breakdown). Same rules as events: flat, up to 20 string or number values. A view sets them on
+the request and the middleware sends them with its page view:
+
+```python
+def article(request, slug):
+    request.runomine_props = {"section": "news", "area": "public"}
+    ...
+```
+
 ## FastAPI / Starlette (any ASGI app)
 
 ```python
@@ -116,6 +128,9 @@ async def complete(request: Request):
 The middleware is pure ASGI (no Starlette import). It wraps `send` to see the status and content type and only
 records once the last body chunk has gone out, so the response is never delayed. The user defaults to Starlette's
 `scope["user"].identity` when `AuthenticationMiddleware` is in place; pass `get_user` otherwise.
+
+Page view props (stored as dims, same rules as events): set `request.state.runomine_props = {"section": "news"}` in
+the endpoint, or pass `get_props=lambda scope: ...` to the middleware.
 
 ## Flask (or anything else)
 
@@ -250,7 +265,8 @@ from urllib.parse import urlencode
 import runomine
 
 client = runomine.Client(token="rm_live_...", url=None, enabled=None)   # None means "from the environment"
-client.pageview("https://example.com/pricing", ip=ip, user_agent=ua, referrer=ref, country="ES", user="42")
+client.pageview("https://example.com/pricing", ip=ip, user_agent=ua, referrer=ref, country="ES", user="42",
+                props={"section": "pricing"})                 # optional, stored as the page view's dims
 client.track("purchase", props={"plan": "rent"}, revenue=(4.99, "EUR"), user="42", request=ctx)
 client.flush(timeout=5)   # send now; True when the queue drained
 client.shutdown()         # flush and stop; also runs automatically at exit
@@ -267,6 +283,22 @@ Sending: events are queued in memory (bounded at 10,000; the oldest are dropped 
 `5xx`, `429` and network errors are retried twice with backoff (honouring `Retry-After`), then the batch is dropped
 quietly. Every event has a UUID v7 `id`, so a retried batch is stored once. Errors are logged on the `runomine`
 logger, never raised. The sender is restarted after a fork (gunicorn, uWSGI).
+
+### Samples: your app's own numbers on the Live page
+
+From a scheduled job, a few times a minute: queue depth, CPU, people on the site right now. Nested dicts become
+dotted keys (`queue.pending`), booleans 0/1, anything that isn't a number is dropped. Samples are sent at once to
+`POST /api/v1/samples`, in the calling thread and not through the queue, with the same retries; one per second (the
+same `ts` again replaces it), any age.
+
+```python
+ok = runomine.sample({"queue": {"pending": 3, "failed": 0}, "healthy": True})   # or client.sample(...)
+client.sample({"cpu": 0.12}, ts=datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc))   # measured earlier
+client.samples([{"ts": "2026-10-14T10:00:00Z", "data": {"cpu": 0.1}}, ...])   # a catch-up, 500 per call
+```
+
+They return `True` when runomine took the call and `False` when the client is disabled or the call failed after the
+retries (so a cursor-based push knows not to advance). They never raise.
 
 ## Privacy
 

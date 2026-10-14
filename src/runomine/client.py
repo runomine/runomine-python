@@ -42,6 +42,7 @@ logger.addHandler(logging.NullHandler())
 DEFAULT_URL = "https://runomine.com"
 MAX_BATCH = 500
 EVENTS_PATH = "/api/v1/events"
+SAMPLES_PATH = "/api/v1/samples"
 _NAME_RE = re.compile(r"^[a-z0-9_.:-]{1,64}$")
 _FALSE = {"0", "false", "no", "off"}
 
@@ -196,6 +197,7 @@ class Client:
             logger.debug("runomine: no RUNOMINE_TOKEN, the client is disabled")
 
         self.endpoint = self.url + EVENTS_PATH
+        self.samples_endpoint = self.url + SAMPLES_PATH
         self.flush_interval = flush_interval
         self.timeout = timeout
         self.max_retries = max_retries
@@ -305,8 +307,13 @@ class Client:
         visitor: str | None = None,
         ts: Any = None,
         request: RequestContext | Mapping | None = None,
+        props: Mapping[str, Any] | None = None,
     ) -> str | None:
-        """Queue a pageview. Returns the event id, or None when disabled or on error. Never raises."""
+        """Queue a pageview. Returns the event id, or None when disabled or on error. Never raises.
+
+        ``props`` follow ``track``'s rules (flat, up to 20 keys, string or number values); runomine stores them as the
+        page view's dims, each key a breakdown and a filter in Traffic (``area`` feeds the Areas breakdown).
+        """
         if not self.enabled:
             return None
         try:
@@ -336,6 +343,9 @@ class Client:
             user = user if user is not None else ctx.user
             if user is not None and user != "":
                 event["user"] = str(user)
+            properties = _props(props)
+            if properties:
+                event["props"] = properties
             return self._enqueue(event)
         except Exception:
             logger.debug("runomine: pageview failed", exc_info=True)
@@ -393,6 +403,42 @@ class Client:
         except Exception:
             logger.debug("runomine: track failed", exc_info=True)
             return None
+
+    def sample(self, data: Mapping[str, Any], ts: Any = None) -> bool:
+        """Send one sample of the app's own ops numbers (queue depth, CPU, people on the site right now) to
+        ``POST /api/v1/samples``, for runomine's Live page. Never raises.
+
+        Nested mappings become dotted keys there (``queue.pending``), booleans 0/1, and anything that isn't a number is
+        dropped. Sent at once in the calling thread, not queued, with the same retries as events; one sample per
+        second (the same ``ts`` again replaces it), any age. True when runomine took it, False when disabled or failed.
+        """
+        return self.samples([{"data": data, "ts": ts}])
+
+    def samples(self, samples: Any) -> bool:
+        """Send several samples, each ``{"data": {...}, "ts": ...}`` (a catch-up after an outage), in calls of at most
+        500. True when runomine took every call. Never raises."""
+        if not self.enabled:
+            return False
+        try:
+            rows = [
+                {"ts": _iso(item.get("ts")), "data": dict(item["data"])}
+                for item in samples
+                if isinstance(item, Mapping) and isinstance(item.get("data"), Mapping)
+            ]
+            ok = True
+            for start in range(0, len(rows), MAX_BATCH):
+                chunk = rows[start : start + MAX_BATCH]
+                try:
+                    body = json.dumps({"samples": chunk}, separators=(",", ":"), default=str, allow_nan=False, ensure_ascii=False)
+                except Exception:
+                    logger.warning("runomine: dropping samples that cannot be serialised", exc_info=True)
+                    ok = False
+                    continue
+                ok = self._post(self.samples_endpoint, body.encode("utf-8"), len(chunk)) and ok
+            return ok
+        except Exception:
+            logger.debug("runomine: samples failed", exc_info=True)
+            return False
 
     def flush(self, timeout: float | None = 5.0) -> bool:
         """Send everything queued now. Waits up to ``timeout`` seconds; True when the queue drained."""
@@ -474,7 +520,9 @@ class Client:
                     self._idle.notify_all()
 
     def _send(self, batch: list[str]) -> bool:
-        body = ('{"events":[' + ",".join(batch) + "]}").encode("utf-8")
+        return self._post(self.endpoint, ('{"events":[' + ",".join(batch) + "]}").encode("utf-8"), len(batch))
+
+    def _post(self, url: str, body: bytes, count: int) -> bool:
         headers = {
             "Authorization": "Bearer " + (self.token or ""),
             "Content-Type": "application/json",
@@ -484,7 +532,7 @@ class Client:
         for attempt in range(self.max_retries + 1):
             retry_after = None
             try:
-                status, retry_after = self._transport(self.endpoint, body, headers, self.timeout)
+                status, retry_after = self._transport(url, body, headers, self.timeout)
             except Exception as error:
                 status = None
                 logger.debug("runomine: network error: %s", error)
@@ -493,9 +541,9 @@ class Client:
             if status is not None and status != 429 and status < 500:
                 if status == 401 and not self._warned_401:
                     self._warned_401 = True
-                    logger.warning("runomine: 401 from %s, check RUNOMINE_TOKEN", self.endpoint)
+                    logger.warning("runomine: 401 from %s, check RUNOMINE_TOKEN", url)
                 else:
-                    logger.debug("runomine: %s, dropping %d events", status, len(batch))
+                    logger.debug("runomine: %s, dropping %d items", status, count)
                 return False
             if attempt == self.max_retries:
                 break
@@ -507,7 +555,7 @@ class Client:
                     pass
             if self._abort.wait(delay):
                 break
-        logger.debug("runomine: giving up on %d events", len(batch))
+        logger.debug("runomine: giving up on %d items", count)
         return False
 
 

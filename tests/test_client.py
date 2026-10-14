@@ -105,6 +105,62 @@ def test_pageview_from_keywords_derives_host_from_url(client, transport):
     assert "referrer" not in event and "user" not in event and "country" not in event
 
 
+def test_pageview_props_follow_the_track_rules(client, transport):
+    client.pageview(
+        "https://example.com/news",
+        ip="1.2.3.4",
+        user_agent="UA",
+        props={"section": "news", "team": 7, "live": False, "gone": None},
+    )
+    client.pageview("https://example.com/", ip="1.2.3.4", user_agent="UA", props={})
+    client.pageview("https://example.com/", ip="1.2.3.4", user_agent="UA", props="not a mapping")
+    client.flush(2)
+    first, second, third = transport.events
+    assert first["props"] == {"section": "news", "team": 7, "live": "false"}
+    assert "props" not in second and "props" not in third
+
+
+def test_samples_go_at_once_to_their_own_endpoint(client, transport):
+    import datetime as dt
+
+    assert client.sample({"queue": {"pending": 3}, "healthy": True}, "2026-10-13T18:00:00.000Z") is True
+    assert client.sample({"cpu": 0.5}, dt.datetime(2026, 10, 13, 20, 0, tzinfo=dt.timezone(dt.timedelta(hours=2)))) is True
+    assert client.sample({}) is True
+    assert len(client._queue) == 0  # not queued with the events
+    assert [c["url"] for c in transport.calls] == ["https://runomine.test/api/v1/samples"] * 3
+    assert transport.calls[0]["headers"]["Authorization"] == "Bearer " + TOKEN
+    assert transport.calls[0]["json"] == {"samples": [{"ts": "2026-10-13T18:00:00.000Z", "data": {"queue": {"pending": 3}, "healthy": True}}]}
+    assert transport.samples[1] == {"ts": "2026-10-13T18:00:00.000Z", "data": {"cpu": 0.5}}
+    assert TS.match(transport.samples[2]["ts"]) and transport.samples[2]["data"] == {}
+    assert transport.events == []
+
+
+def test_many_samples_in_calls_of_500_and_failures_are_false():
+    transport = FakeTransport([202, 400])
+    client = Client(token=TOKEN, url="https://runomine.test", transport=transport, backoff=0.001)
+    rows = [{"ts": 1760000000 + i * 60, "data": {"n": i}} for i in range(501)]
+    assert client.samples([*rows, "junk", {"ts": 1}, {"data": [1, 2]}]) is False
+    assert [len(c["json"]["samples"]) for c in transport.calls] == [500, 1]
+
+    failing = FakeTransport([503, 503, 503])
+    assert Client(token=TOKEN, transport=failing, backoff=0.001).sample({"cpu": 1}) is False
+    assert len(failing.calls) == 3
+    assert Client(token=TOKEN, transport=FakeTransport([503, 202]), backoff=0.001).sample({"cpu": 1}) is True
+    assert Client(token=TOKEN, transport=FakeTransport([ConnectionError("down")] * 3), backoff=0.001).sample({"cpu": 1}) is False
+    assert client.samples([]) is True
+    disabled = FakeTransport()
+    assert Client(token=TOKEN, enabled=False, transport=disabled).sample({"cpu": 1}) is False
+    assert disabled.calls == []
+
+
+def test_module_level_sample(monkeypatch):
+    transport = FakeTransport()
+    runomine.set_client(Client(token=TOKEN, transport=transport))
+    assert runomine.sample({"cpu": 1}) is True
+    assert runomine.samples([{"data": {"cpu": 2}}]) is True
+    assert [s["data"] for s in transport.samples] == [{"cpu": 1}, {"cpu": 2}]
+
+
 def test_purchase_payload(client, transport):
     client.track(
         "purchase",

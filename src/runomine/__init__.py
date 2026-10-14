@@ -28,6 +28,8 @@ __all__ = [
     "set_client",
     "track",
     "pageview",
+    "sample",
+    "samples",
     "checkout_metadata",
     "flush",
     "shutdown",
@@ -70,6 +72,22 @@ def pageview(url: str | None = None, **kwargs: Any) -> str | None:
         return get_client().pageview(url, **kwargs)
     except Exception:
         return None
+
+
+def sample(data: Any, ts: Any = None) -> bool:
+    """``get_client().sample(...)``: the app's own ops numbers, sent at once to runomine's Live page. Never raises."""
+    try:
+        return get_client().sample(data, ts)
+    except Exception:
+        return False
+
+
+def samples(items: Any) -> bool:
+    """``get_client().samples(...)``: several ``{"data": ..., "ts": ...}``, in calls of at most 500. Never raises."""
+    try:
+        return get_client().samples(items)
+    except Exception:
+        return False
 
 
 def flush(timeout: float | None = 5.0) -> bool:

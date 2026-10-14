@@ -250,6 +250,33 @@ def test_starlette_track_helper(rom, transport):
     assert signup["visitor"] == purchase["visitor"]
 
 
+def test_starlette_page_view_props_from_request_state(rom, transport):
+    async def news(request):
+        request.state.runomine_props = {"section": "news", "area": "public"}
+        return HTMLResponse("<h1>news</h1>")
+
+    async def home(request):
+        return HTMLResponse("<h1>home</h1>")
+
+    app = Starlette(routes=[Route("/news", news), Route("/", home)], middleware=[Middleware(RunomineMiddleware, client=rom)])
+    call(app, "GET", "/news")
+    call(app, "GET", "/")
+    news_view, home_view = sent(rom, transport)
+    assert news_view["props"] == {"section": "news", "area": "public"}
+    assert "props" not in home_view
+
+
+def test_get_props_option(rom, transport):
+    app = RunomineMiddleware(raw_app(), client=rom, get_props=lambda scope: {"path": scope["path"]})
+    run(app, http_scope("/x"))
+    [event] = sent(rom, transport)
+    assert event["props"] == {"path": "/x"}
+
+    broken = RunomineMiddleware(raw_app(), client=rom, get_props=lambda scope: 1 / 0)
+    run(broken, http_scope("/y"))
+    assert "props" not in sent(rom, transport)[-1]
+
+
 def test_fastapi_style_add_middleware(rom, transport):
     async def home(request):
         return HTMLResponse("<h1>home</h1>")

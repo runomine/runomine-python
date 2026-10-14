@@ -29,7 +29,11 @@ class FakeTransport:
 
     @property
     def events(self):
-        return [event for call in self.calls for event in call["json"]["events"]]
+        return [event for call in self.calls for event in call["json"].get("events", [])]
+
+    @property
+    def samples(self):
+        return [sample for call in self.calls for sample in call["json"].get("samples", [])]
 
 
 @pytest.fixture(autouse=True)

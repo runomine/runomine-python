@@ -161,6 +161,8 @@ except Exception:  # pragma: no cover
 class RunomineMiddleware:
     """Records a pageview for ``GET`` requests answered ``200 text/html``, outside ``RUNOMINE_SKIP_PATHS``.
 
+    A view can attach props to its page view with ``request.runomine_props = {"section": "news"}``.
+
     The pageview is queued once the view has produced its response; sending happens on a background thread,
     so the response is never delayed by runomine and nothing here can raise into the request.
     """
@@ -212,6 +214,8 @@ class RunomineMiddleware:
 
     def _record(self, request: Any) -> None:
         try:
-            get_client().pageview(request=context_from_request(request, self.ip_header))
+            get_client().pageview(
+                request=context_from_request(request, self.ip_header), props=getattr(request, "runomine_props", None)
+            )
         except Exception:
             logger.debug("runomine: pageview failed", exc_info=True)
